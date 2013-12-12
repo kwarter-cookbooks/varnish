@@ -3,3 +3,9 @@ backend default {
         .port = "<%= node['varnish']['backend_port'] %>";
 }
 
+sub vcl_fetch {
+if(beresp.http.Expires) {
+  unset beresp.http.Set-Cookie;
+  return(deliver);
+}
+}
