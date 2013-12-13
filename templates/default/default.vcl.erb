@@ -3,9 +3,62 @@ backend default {
         .port = "<%= node['varnish']['backend_port'] %>";
 }
 
-sub vcl_fetch {
-if(beresp.http.Expires) {
-  unset beresp.http.Set-Cookie;
-  return(deliver);
+sub vcl_recv {
+    if (req.restarts == 0) {
+      if (req.http.x-forwarded-for) {
+          set req.http.X-Forwarded-For =
+              req.http.X-Forwarded-For + ", " + client.ip;
+      } else {
+          set req.http.X-Forwarded-For = client.ip;
+      }
+    }
+    if (req.request != "GET" &&
+      req.request != "HEAD" &&
+      req.request != "PUT" &&
+      req.request != "POST" &&
+      req.request != "TRACE" &&
+      req.request != "OPTIONS" &&
+      req.request != "DELETE") {
+        /* Non-RFC2616 or CONNECT which is weird. */
+        return (pipe);
+    }
+    if (req.request != "GET" && req.request != "HEAD") {
+        /* We only deal with GET and HEAD by default */
+        return (pass);
+    }
+
+    /* KWARTER: Normally Varnish would ignore any request where the client
+       sets a cookie. That doesn't work for us since our clients will always
+       set cookies. Instead, let vcl_fetch decide whether to serve a cached
+       copy. */
+    if (req.http.Authorization) {
+        /* Not cacheable by default */
+        return (pass);
+    }
+
+    return (lookup);
 }
+
+sub vcl_hash {
+
+    /* Ignore the access_token when finding potential cache hits. Note that
+       this value is only consumed by the hashing function and isn't passed on
+       to the backend, so the resulting URL doesn't have to be
+       HTTP-compliant. */
+    hash_data(regsub(req.url, "access_token=(?:[^&]*)", "ACCESS_TOKEN"));
+    if (req.http.host) {
+        hash_data(req.http.host);
+    } else {
+        hash_data(server.ip);
+    }
+    return (hash);
+}
+
+sub vcl_fetch {
+    /* We only set Expires headers on views we want to cache. Ergo, cache a
+	   page if and only if an Expires header is set on it. */
+	if(beresp.http.Expires) {
+		  unset beresp.http.Set-Cookie;
+		  return(deliver);
+	}
 }
